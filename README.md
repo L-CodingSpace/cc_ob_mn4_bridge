@@ -92,6 +92,7 @@ Obsidian commands:
 - `Capture with Clipboard Link`
 - `Import Latest MarginNote Card Image`
 - `Export MarginNote Word and Import Card from Clipboard Link`
+- `Export MarginNote Word as Markdown Outline`
 
 Most important command for the current MarginNote workflow:
 
@@ -104,6 +105,20 @@ Default hotkey:
 ```text
 Cmd+Shift+Option+W
 ```
+
+Batch outline import command:
+
+```text
+Export MarginNote Word as Markdown Outline
+```
+
+Default hotkey:
+
+```text
+Cmd+Shift+Option+O
+```
+
+This command parses MarginNote's Word export into a Markdown bullet outline. It preserves Word heading levels, MarginNote backlinks, and card images where they are available in the `.docx`.
 
 ## Notes
 

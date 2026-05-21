@@ -72,6 +72,19 @@ interface MarginNotePayload {
   noteId?: string;
 }
 
+interface MarginNoteOutlineItem {
+  level: number;
+  title?: string;
+  link?: string;
+  imagePath?: string;
+  extraImagePaths?: string[];
+  body?: string[];
+}
+
+interface MarginNoteOutlineResult {
+  items: MarginNoteOutlineItem[];
+}
+
 const DEFAULT_SETTINGS: PdfExpertCaptureSettings = {
   captureFolder: "attachments/pdf-captures",
   imageNameTemplate: "{pdfName}-p{page}-{timestamp}.png",
@@ -177,6 +190,20 @@ export default class PdfExpertCapturePlugin extends Plugin {
       ],
       callback: () => {
         void this.exportMarginNoteWordAndImportCard();
+      }
+    });
+
+    this.addCommand({
+      id: "export-marginnote-word-as-markdown-outline",
+      name: "Export MarginNote Word as Markdown Outline",
+      hotkeys: [
+        {
+          modifiers: ["Mod", "Shift", "Alt"],
+          key: "O"
+        }
+      ],
+      callback: () => {
+        void this.exportMarginNoteWordAsMarkdownOutline();
       }
     });
 
@@ -444,6 +471,38 @@ export default class PdfExpertCapturePlugin extends Plugin {
     }
   }
 
+  private async exportMarginNoteWordAsMarkdownOutline() {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) {
+      new Notice("Open a Markdown note before importing a MarginNote outline.");
+      return;
+    }
+
+    try {
+      new Notice("Exporting MarginNote Word file for Markdown outline. Please confirm MarginNote export dialogs.");
+      const outline = await this.runHelper<MarginNoteOutlineResult>([
+        "export-marginnote-word-outline",
+        "--source-app",
+        this.settings.sourceLinkApp,
+        "--export-folder",
+        this.settings.marginNoteExportFolder,
+        "--timeout-ms",
+        String(this.settings.marginNoteExportTimeoutMs)
+      ]);
+
+      if (!outline.items?.length) {
+        throw new Error("The helper did not return any MarginNote outline items.");
+      }
+
+      const markdown = await this.buildMarginNoteOutlineMarkdown(outline.items);
+      view.editor.replaceSelection(markdown);
+      new Notice(`MarginNote outline imported (${outline.items.length} items).`);
+    } catch (error) {
+      new Notice(`Could not import MarginNote outline: ${formatError(error)}`);
+      console.error("Could not import MarginNote outline", error);
+    }
+  }
+
   private async openAnchor(params: AnchorParams) {
     const file = await this.resolvePdfPath(params);
     if (!file) {
@@ -615,6 +674,65 @@ export default class PdfExpertCapturePlugin extends Plugin {
 
     await fs.copyFile(capture.imagePath, destinationPath);
     return uniquePath;
+  }
+
+  private async importMarginNoteOutlineImage(imagePath: string, index: number): Promise<string> {
+    const adapter = this.app.vault.adapter;
+    if (!(adapter instanceof FileSystemAdapter)) {
+      throw new Error("This plugin requires a local filesystem vault.");
+    }
+
+    const folder = normalizePath(this.settings.captureFolder.trim() || DEFAULT_SETTINGS.captureFolder);
+    await ensureVaultFolder(this.app, folder);
+
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[-:]/g, "")
+      .replace(/\..+$/, "")
+      .replace("T", "-");
+    const ext = path.extname(imagePath) || ".png";
+    const fileName = sanitizeFileName(`marginnote-outline-${timestamp}-${String(index + 1).padStart(3, "0")}${ext}`);
+    const uniquePath = await nextAvailableVaultPath(this.app, normalizePath(`${folder}/${fileName}`));
+    const destinationPath = path.join(adapter.getBasePath(), uniquePath);
+
+    await fs.copyFile(imagePath, destinationPath);
+    return uniquePath;
+  }
+
+  private async buildMarginNoteOutlineMarkdown(items: MarginNoteOutlineItem[]): Promise<string> {
+    const lines: string[] = [];
+
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const level = Math.max(0, Number.isFinite(item.level) ? item.level : 0);
+      const indent = "  ".repeat(level);
+      const childIndent = `${indent}  `;
+      const title = cleanOutlineText(item.title || "") || (item.imagePath ? "MarginNote card" : "Untitled card");
+      const heading = item.link
+        ? `[${escapeMarkdownLinkText(title)}](${item.link})`
+        : escapeMarkdownListText(title);
+
+      lines.push(`${indent}- ${heading}`);
+
+      if (item.imagePath) {
+        const vaultImagePath = await this.importMarginNoteOutlineImage(item.imagePath, index);
+        lines.push(`${childIndent}- ![[${vaultImagePath}]]`);
+      }
+
+      for (const extraImagePath of item.extraImagePaths || []) {
+        const vaultImagePath = await this.importMarginNoteOutlineImage(extraImagePath, index);
+        lines.push(`${childIndent}- ![[${vaultImagePath}]]`);
+      }
+
+      for (const bodyLine of item.body || []) {
+        const cleaned = cleanOutlineText(bodyLine);
+        if (cleaned) {
+          lines.push(`${childIndent}- ${escapeMarkdownListText(cleaned)}`);
+        }
+      }
+    }
+
+    return `${lines.join("\n")}\n`;
   }
 
   private buildMarkdown(vaultImagePath: string, capture: CaptureResult): string {
@@ -1116,6 +1234,18 @@ function noteIdFromMarginNoteImageName(fileName: string): string | null {
 function noteIdFromMarginNoteUrl(url: string): string | null {
   const match = url.match(/marginnote(?:3app|4app)?:\/\/note\/([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})/i);
   return match?.[1]?.toUpperCase() ?? null;
+}
+
+function cleanOutlineText(value: string): string {
+  return value.replace(/\s+/g, " ").replace(/\s*>>\s*$/g, "").trim();
+}
+
+function escapeMarkdownLinkText(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+}
+
+function escapeMarkdownListText(value: string): string {
+  return value.replace(/\n/g, " ").trim();
 }
 
 function renderImageName(template: string, pdfName: string, page: number): string {

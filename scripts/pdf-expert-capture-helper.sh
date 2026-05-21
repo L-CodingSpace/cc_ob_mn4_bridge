@@ -9,6 +9,8 @@ Usage:
   pdf-expert-capture-helper.sh capture-selected-card --source-app "MarginNote 4"
   pdf-expert-capture-helper.sh export-marginnote-card --source-app "MarginNote 4" --export-folder /Users/ming/Desktop/imgs --timeout-ms 20000
   pdf-expert-capture-helper.sh export-marginnote-word-card --source-app "MarginNote 4" --note-id UUID --timeout-ms 20000
+  pdf-expert-capture-helper.sh export-marginnote-word-outline --source-app "MarginNote 4" --export-folder /Users/ming/Desktop/imgs --timeout-ms 60000
+  pdf-expert-capture-helper.sh parse-marginnote-word-outline --file /path/to/export.docx
   pdf-expert-capture-helper.sh capture-auto-link --source-app "MarginNote 4" --copy-menu-item "复制卡片 URL" --copy-shortcut "cmd+shift+c" --copy-delay-ms 700
   pdf-expert-capture-helper.sh open --pdf-app "PDF Expert" --file /path/to/file.pdf --page 12 --enable-positioning 0
 EOF
@@ -347,6 +349,62 @@ export_marginnote_word_card() {
   emit_json "$image_path" "" "1" "" "marginnote"
 }
 
+export_marginnote_word_outline() {
+  local source_app export_folder timeout_ms tmpdir stamp snapshot_path docx_path image_dir
+  source_app="$(arg_value "--source-app" "$@")"
+  export_folder="$(arg_value "--export-folder" "$@")"
+  timeout_ms="$(arg_value "--timeout-ms" "$@")"
+
+  source_app="${source_app:-MarginNote 4}"
+  export_folder="${export_folder:-/Users/ming/Desktop/imgs}"
+  timeout_ms="${timeout_ms:-60000}"
+  if [[ "$timeout_ms" =~ ^[0-9]+$ && "$timeout_ms" -lt 60000 ]]; then
+    timeout_ms="60000"
+  fi
+
+  tmpdir="${TMPDIR:-/tmp}/pdf-expert-capture"
+  mkdir -p "$tmpdir"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  snapshot_path="$tmpdir/marginnote-docx-outline-snapshot-$stamp.json"
+  image_dir="$tmpdir/marginnote-outline-$stamp"
+  mkdir -p "$image_dir"
+
+  snapshot_docx_exports "$export_folder" "$snapshot_path"
+
+  trigger_marginnote_word_export "$source_app"
+  docx_path="$(find_changed_marginnote_docx_export "$export_folder" "$snapshot_path" "$timeout_ms")" || {
+    echo "MarginNote Word export did not create a new .docx in $export_folder." >&2
+    rm -f "$snapshot_path"
+    exit 11
+  }
+
+  parse_marginnote_word_outline "$docx_path" "$image_dir" || {
+    rm -f "$snapshot_path"
+    exit 14
+  }
+
+  delete_changed_export "$docx_path" "$snapshot_path" || true
+  rm -f "$snapshot_path"
+}
+
+parse_marginnote_word_outline_file() {
+  local docx_path tmpdir stamp image_dir
+  docx_path="$(arg_value "--file" "$@")"
+
+  if [[ -z "$docx_path" || ! -f "$docx_path" ]]; then
+    echo "MarginNote Word export does not exist: $docx_path" >&2
+    exit 15
+  fi
+
+  tmpdir="${TMPDIR:-/tmp}/pdf-expert-capture"
+  mkdir -p "$tmpdir"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  image_dir="$tmpdir/marginnote-outline-$stamp"
+  mkdir -p "$image_dir"
+
+  parse_marginnote_word_outline "$docx_path" "$image_dir"
+}
+
 trigger_marginnote_word_export() {
   local source_app="$1"
 
@@ -591,6 +649,146 @@ with open(image_path, "wb") as handle:
 PY
 }
 
+parse_marginnote_word_outline() {
+  local docx_path="$1"
+  local image_dir="$2"
+
+  python3 - "$docx_path" "$image_dir" <<'PY'
+import html
+import json
+import os
+import posixpath
+import re
+import sys
+import zipfile
+import xml.etree.ElementTree as ET
+
+docx_path, image_dir = sys.argv[1], sys.argv[2]
+
+NS = {
+    "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+}
+REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+W_VAL = "{%s}val" % NS["w"]
+W_LEFT = "{%s}left" % NS["w"]
+R_EMBED = "{%s}embed" % NS["r"]
+
+def text_of(paragraph):
+    return html.unescape("".join(t.text or "" for t in paragraph.findall(".//w:t", NS))).strip()
+
+def clean_text(value):
+    return re.sub(r"\s+", " ", value).replace(" >>", "").replace(">>", "").strip()
+
+def level_of(paragraph):
+    ppr = paragraph.find("w:pPr", NS)
+    if ppr is None:
+        return 0
+
+    outline = ppr.find("w:outlineLvl", NS)
+    if outline is not None and outline.attrib.get(W_VAL, "").isdigit():
+        return int(outline.attrib[W_VAL])
+
+    ilvl = ppr.find(".//w:ilvl", NS)
+    if ilvl is not None and ilvl.attrib.get(W_VAL, "").isdigit():
+        return int(ilvl.attrib[W_VAL])
+
+    style = ppr.find("w:pStyle", NS)
+    style_value = style.attrib.get(W_VAL, "") if style is not None else ""
+    match = re.search(r"Heading(\d+)", style_value, re.I)
+    if match:
+        return max(0, int(match.group(1)) - 1)
+
+    ind = ppr.find("w:ind", NS)
+    if ind is not None and ind.attrib.get(W_LEFT, "").isdigit():
+        left = int(ind.attrib[W_LEFT])
+        if left >= 800:
+            return 2
+        if left >= 560:
+            return 1
+        return 0
+
+    return 0
+
+def hyperlink_of(paragraph):
+    xml = ET.tostring(paragraph, encoding="unicode")
+    match = re.search(r'HYPERLINK\s+"(marginnote[34]app://note/[0-9A-Fa-f-]+)"', xml)
+    return match.group(1) if match else ""
+
+with zipfile.ZipFile(docx_path) as zf:
+    document = ET.fromstring(zf.read("word/document.xml"))
+    rels_xml = ET.fromstring(zf.read("word/_rels/document.xml.rels"))
+    rels = {}
+    for rel in rels_xml.findall(f"{REL_NS}Relationship"):
+        rel_id = rel.attrib.get("Id")
+        target = rel.attrib.get("Target", "")
+        if rel_id:
+            rels[rel_id] = target
+
+    os.makedirs(image_dir, exist_ok=True)
+
+    items = []
+    previous_item = None
+    image_index = 0
+
+    for paragraph in document.findall(".//w:p", NS):
+        text = clean_text(text_of(paragraph))
+        link = hyperlink_of(paragraph)
+        embeds = [blip.attrib.get(R_EMBED) for blip in paragraph.findall(".//a:blip", NS) if blip.attrib.get(R_EMBED)]
+        level = level_of(paragraph)
+
+        image_paths = []
+        for embed in embeds:
+            target = rels.get(embed)
+            if not target:
+                continue
+            target = target.lstrip("/")
+            if not target.startswith("word/"):
+                target = posixpath.normpath(posixpath.join("word", target))
+            try:
+                data = zf.read(target)
+            except KeyError:
+                continue
+            ext = os.path.splitext(target)[1] or ".png"
+            image_index += 1
+            image_path = os.path.join(image_dir, f"card-{image_index:03d}{ext}")
+            with open(image_path, "wb") as handle:
+                handle.write(data)
+            image_paths.append(image_path)
+
+        if image_paths and not link and not text and previous_item is not None:
+            if not previous_item.get("imagePath"):
+                previous_item["imagePath"] = image_paths[0]
+            else:
+                previous_item.setdefault("body", []).append("")
+                previous_item.setdefault("extraImagePaths", []).append(image_paths[0])
+            for extra_image in image_paths[1:]:
+                previous_item.setdefault("extraImagePaths", []).append(extra_image)
+            continue
+
+        if link or image_paths:
+            item = {
+                "level": level,
+                "title": text,
+                "link": link,
+                "body": [],
+            }
+            if image_paths:
+                item["imagePath"] = image_paths[0]
+                for extra_image in image_paths[1:]:
+                    items.append({"level": level + 1, "title": "", "link": "", "imagePath": extra_image, "body": []})
+            items.append(item)
+            previous_item = item
+            continue
+
+        if text and previous_item is not None:
+            previous_item.setdefault("body", []).append(text)
+
+print(json.dumps({"items": items}, ensure_ascii=False))
+PY
+}
+
 click_marginnote_popover_point() {
   local source_app="$1"
   local target="$2"
@@ -829,6 +1027,12 @@ case "$action" in
     ;;
   export-marginnote-word-card)
     export_marginnote_word_card "$@"
+    ;;
+  export-marginnote-word-outline)
+    export_marginnote_word_outline "$@"
+    ;;
+  parse-marginnote-word-outline)
+    parse_marginnote_word_outline_file "$@"
     ;;
   capture-auto-link)
     capture_auto_link "$@"
