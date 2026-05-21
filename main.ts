@@ -714,29 +714,35 @@ export default class PdfExpertCapturePlugin extends Plugin {
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
       const level = Math.max(0, Number.isFinite(item.level) ? item.level : 0);
-      const indent = "  ".repeat(level);
-      const childIndent = `${indent}  `;
+      const headingPrefix = "#".repeat(Math.min(6, level + 3));
       const title = cleanOutlineText(item.title || "") || (item.imagePath ? "MarginNote card" : "Untitled card");
       const heading = item.link
         ? `[${escapeMarkdownLinkText(title)}](${item.link})`
         : escapeMarkdownListText(title);
 
-      lines.push(`${indent}- ${heading}`);
+      if (lines.length) {
+        lines.push("");
+      }
+
+      lines.push(`${headingPrefix} ${heading}`);
 
       if (item.imagePath) {
         const vaultImagePath = await this.importMarginNoteOutlineImage(item.imagePath, index);
-        lines.push(`${childIndent}- ![[${vaultImagePath}]]`);
+        lines.push("");
+        lines.push(`![[${vaultImagePath}]]`);
       }
 
       for (const extraImagePath of item.extraImagePaths || []) {
         const vaultImagePath = await this.importMarginNoteOutlineImage(extraImagePath, index);
-        lines.push(`${childIndent}- ![[${vaultImagePath}]]`);
+        lines.push("");
+        lines.push(`![[${vaultImagePath}]]`);
       }
 
       for (const bodyLine of item.body || []) {
         const cleaned = cleanOutlineText(bodyLine);
         if (cleaned) {
-          lines.push(`${childIndent}- ${escapeMarkdownListText(cleaned)}`);
+          lines.push("");
+          lines.push(escapeMarkdownListText(cleaned));
         }
       }
     }
