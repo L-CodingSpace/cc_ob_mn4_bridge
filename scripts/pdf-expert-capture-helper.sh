@@ -716,6 +716,10 @@ def hyperlink_of(paragraph):
     match = re.search(r'HYPERLINK\s+"(marginnote[34]app://note/[0-9A-Fa-f-]+)"', xml)
     return match.group(1) if match else ""
 
+def note_id_from_link(link):
+    match = re.search(r"/note/([0-9A-Fa-f-]{36})", link or "")
+    return match.group(1).upper() if match else ""
+
 with zipfile.ZipFile(docx_path) as zf:
     document = ET.fromstring(zf.read("word/document.xml"))
     rels_xml = ET.fromstring(zf.read("word/_rels/document.xml.rels"))
@@ -772,6 +776,7 @@ with zipfile.ZipFile(docx_path) as zf:
                 "level": level,
                 "title": text,
                 "link": link,
+                "noteId": note_id_from_link(link),
                 "body": [],
             }
             if image_paths:

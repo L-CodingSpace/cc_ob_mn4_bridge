@@ -84,6 +84,8 @@ CopyCardURL.mnaddon
 
 The addon only copies the focused card URL to the clipboard. It does not export images and does not control Obsidian.
 
+If multiple cards are selected, the addon copies a JSON selection payload with all selected note IDs. Obsidian uses that payload to filter the Word outline import to only the selected card subtrees.
+
 ## Key Commands
 
 Obsidian commands:

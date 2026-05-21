@@ -1,5 +1,5 @@
 JSB.newAddon = function(mainPath) {
-  var ADDON_VERSION = "0.3.0";
+  var ADDON_VERSION = "0.4.0";
 
   var CopyCardURLAddon = JSB.defineClass("CopyCardURLAddon : JSExtension", {
     sceneWillConnect: function() {
@@ -17,21 +17,31 @@ JSB.newAddon = function(mainPath) {
     },
 
     copyFocusedCardURL: function(sender) {
-      var selection = findFocusedSelection();
-      if (!selection || !selection.note) {
+      var selections = findFocusedSelections();
+      if (!selections.length) {
         showHUD("No focused card");
         return;
       }
 
-      var noteId = getNoteId(selection.note);
-      if (!noteId) {
+      var cards = uniqueCardsFromSelections(selections);
+      if (!cards.length) {
         showHUD("No card URL");
         return;
       }
 
-      var sourceUrl = "marginnote3app://note/" + encodeURIComponent(noteId);
-      UIPasteboard.generalPasteboard().string = sourceUrl;
-      showHUD("Copied card URL");
+      if (cards.length === 1) {
+        UIPasteboard.generalPasteboard().string = cards[0].url;
+        showHUD("Copied card URL");
+        return;
+      }
+
+      UIPasteboard.generalPasteboard().string = JSON.stringify({
+        type: "marginnote-selection",
+        version: ADDON_VERSION,
+        noteIds: cards.map(function(card) { return card.noteId; }),
+        links: cards.map(function(card) { return card.url; })
+      });
+      showHUD("Copied " + cards.length + " card URLs");
     }
   }, {});
 
@@ -39,20 +49,27 @@ JSB.newAddon = function(mainPath) {
 };
 
 function findFocusedSelection() {
+  var selections = findFocusedSelections();
+  return selections.length ? selections[0] : null;
+}
+
+function findFocusedSelections() {
   var controller = getStudyController();
-  if (!controller) return null;
+  if (!controller) return [];
 
   var notebookController = readValue(controller, "notebookController");
-  if (!notebookController) return null;
+  if (!notebookController) return [];
 
+  var result = [];
   var mindmapView = readValue(notebookController, "mindmapView");
   var selectedViews = readValue(mindmapView, "selViewLst");
   if (selectedViews && selectedViews.count && selectedViews.count() > 0) {
     for (var i = 0; i < selectedViews.count(); i++) {
       var selectedView = selectedViews.objectAtIndex(i);
       var note = unwrapNote(selectedView);
-      if (note) return { note: note, view: selectedView };
+      if (note) result.push({ note: note, view: selectedView });
     }
+    if (result.length) return result;
   }
 
   var candidates = [
@@ -63,10 +80,27 @@ function findFocusedSelection() {
 
   for (var j = 0; j < candidates.length; j++) {
     var candidate = unwrapNote(candidates[j]);
-    if (candidate) return { note: candidate, view: null };
+    if (candidate) return [{ note: candidate, view: null }];
   }
 
-  return null;
+  return [];
+}
+
+function uniqueCardsFromSelections(selections) {
+  var result = [];
+  var seen = {};
+
+  for (var i = 0; i < selections.length; i++) {
+    var noteId = getNoteId(selections[i].note);
+    if (!noteId || seen[noteId]) continue;
+    seen[noteId] = true;
+    result.push({
+      noteId: noteId,
+      url: "marginnote3app://note/" + encodeURIComponent(noteId)
+    });
+  }
+
+  return result;
 }
 
 function findViewForNoteId(noteId) {

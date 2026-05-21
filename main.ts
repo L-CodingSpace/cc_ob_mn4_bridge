@@ -76,6 +76,7 @@ interface MarginNoteOutlineItem {
   level: number;
   title?: string;
   link?: string;
+  noteId?: string;
   imagePath?: string;
   extraImagePaths?: string[];
   body?: string[];
@@ -479,6 +480,7 @@ export default class PdfExpertCapturePlugin extends Plugin {
     }
 
     try {
+      const selectedNoteIds = this.readMarginNoteSelectedNoteIds();
       new Notice("Exporting MarginNote Word file for Markdown outline. Please confirm MarginNote export dialogs.");
       const outline = await this.runHelper<MarginNoteOutlineResult>([
         "export-marginnote-word-outline",
@@ -494,9 +496,16 @@ export default class PdfExpertCapturePlugin extends Plugin {
         throw new Error("The helper did not return any MarginNote outline items.");
       }
 
-      const markdown = await this.buildMarginNoteOutlineMarkdown(outline.items);
+      const items = selectedNoteIds.length
+        ? filterMarginNoteOutlineItems(outline.items, selectedNoteIds)
+        : outline.items;
+      if (!items.length) {
+        throw new Error("No Word outline nodes matched the selected MarginNote card URLs in the clipboard.");
+      }
+
+      const markdown = await this.buildMarginNoteOutlineMarkdown(items);
       view.editor.replaceSelection(markdown);
-      new Notice(`MarginNote outline imported (${outline.items.length} items).`);
+      new Notice(`MarginNote outline imported (${items.length} items).`);
     } catch (error) {
       new Notice(`Could not import MarginNote outline: ${formatError(error)}`);
       console.error("Could not import MarginNote outline", error);
@@ -829,6 +838,50 @@ export default class PdfExpertCapturePlugin extends Plugin {
       .filter(Boolean);
 
     return allowed.includes(scheme) ? url : null;
+  }
+
+  private readMarginNoteSelectedNoteIds(): string[] {
+    const text = electronClipboard?.readText().trim() ?? "";
+    if (!text) {
+      return [];
+    }
+
+    const ids: string[] = [];
+    try {
+      const payload = JSON.parse(text) as { type?: string; noteIds?: unknown; links?: unknown };
+      if (payload.type === "marginnote-selection") {
+        if (Array.isArray(payload.noteIds)) {
+          for (const value of payload.noteIds) {
+            if (typeof value === "string") {
+              ids.push(value);
+            }
+          }
+        }
+
+        if (Array.isArray(payload.links)) {
+          for (const value of payload.links) {
+            if (typeof value === "string") {
+              const noteId = noteIdFromMarginNoteUrl(value);
+              if (noteId) {
+                ids.push(noteId);
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Plain URL clipboard formats are handled below.
+    }
+
+    const urlMatches = text.match(/marginnote(?:3app|4app)?:\/\/note\/[0-9A-Fa-f-]{36}/gi) || [];
+    for (const url of urlMatches) {
+      const noteId = noteIdFromMarginNoteUrl(url);
+      if (noteId) {
+        ids.push(noteId);
+      }
+    }
+
+    return uniqueNoteIds(ids);
   }
 
   private async resolvePdfPath(params: AnchorParams): Promise<string | null> {
@@ -1234,6 +1287,74 @@ function noteIdFromMarginNoteImageName(fileName: string): string | null {
 function noteIdFromMarginNoteUrl(url: string): string | null {
   const match = url.match(/marginnote(?:3app|4app)?:\/\/note\/([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})/i);
   return match?.[1]?.toUpperCase() ?? null;
+}
+
+function noteIdFromOutlineItem(item: MarginNoteOutlineItem): string | null {
+  if (item.noteId) {
+    return item.noteId.toUpperCase();
+  }
+
+  return item.link ? noteIdFromMarginNoteUrl(item.link) : null;
+}
+
+function uniqueNoteIds(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = value.trim().toUpperCase();
+    if (!/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/.test(normalized)) {
+      continue;
+    }
+
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      result.push(normalized);
+    }
+  }
+
+  return result;
+}
+
+function filterMarginNoteOutlineItems(items: MarginNoteOutlineItem[], selectedNoteIds: string[]): MarginNoteOutlineItem[] {
+  const selected = new Set(uniqueNoteIds(selectedNoteIds));
+  if (!selected.size) {
+    return items;
+  }
+
+  const selectedIndexes: number[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const noteId = noteIdFromOutlineItem(items[index]);
+    if (noteId && selected.has(noteId)) {
+      selectedIndexes.push(index);
+    }
+  }
+
+  const result: MarginNoteOutlineItem[] = [];
+  let coveredUntil = -1;
+
+  for (const startIndex of selectedIndexes) {
+    if (startIndex < coveredUntil) {
+      continue;
+    }
+
+    const rootLevel = Math.max(0, items[startIndex].level || 0);
+    let endIndex = startIndex + 1;
+    while (endIndex < items.length && (items[endIndex].level || 0) > rootLevel) {
+      endIndex += 1;
+    }
+
+    for (let index = startIndex; index < endIndex; index += 1) {
+      result.push({
+        ...items[index],
+        level: Math.max(0, (items[index].level || 0) - rootLevel)
+      });
+    }
+
+    coveredUntil = endIndex;
+  }
+
+  return result;
 }
 
 function cleanOutlineText(value: string): string {
