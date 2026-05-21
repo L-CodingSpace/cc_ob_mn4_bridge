@@ -1,0 +1,10 @@
+{
+  "id": "pdf-expert-capture",
+  "name": "PDF Expert Capture",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Capture PDF Expert regions into Obsidian notes with backlinks to the source PDF.",
+  "author": "",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}

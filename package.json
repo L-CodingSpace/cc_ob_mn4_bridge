@@ -1,0 +1,25 @@
+{
+  "name": "obsidian-pdf-expert-capture",
+  "version": "0.1.0",
+  "description": "Capture annotated PDF regions from PDF Expert into Obsidian with source backlinks.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "keywords": [
+    "obsidian",
+    "pdf",
+    "pdf-expert",
+    "capture"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.20.2",
+    "obsidian": "^1.5.12",
+    "typescript": "^5.4.2"
+  }
+}

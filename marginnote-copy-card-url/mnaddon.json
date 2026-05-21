@@ -1,0 +1,9 @@
+{
+  "addonid": "marginnote.extension.copycardurl",
+  "author": "Codex",
+  "title": "Copy Card URL",
+  "version": "0.3.0",
+  "marginnote_version_min": "3.6.11",
+  "cert_key": "",
+  "description": "Copy the focused MarginNote card URL to the clipboard."
+}
